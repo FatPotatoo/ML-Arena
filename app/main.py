@@ -9,7 +9,7 @@ The application entry point.
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routers import dataset
+from .routers import dataset, train
 
 app = FastAPI(title="ML Arena API", version="0.1.0")
 
@@ -27,6 +27,7 @@ app.add_middleware(
 
 # --- Routers ------------------------------------------------------------
 app.include_router(dataset.router)
+app.include_router(train.router)
 
 
 @app.get("/api/health")
