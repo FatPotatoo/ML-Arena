@@ -26,7 +26,7 @@ from sklearn.metrics import (
 )
 
 from .data import TARGET, load_raw, split_chronological
-from .pipeline import build_pipeline
+from .pipeline import build_pipeline, resolve_missing
 from .schemas import TrainConfig
 
 
@@ -66,20 +66,24 @@ def run_training(config: TrainConfig) -> dict:
 
     features = list(config.features)
 
-    # --- Missing-value strategies that REMOVE data (handled before the pipeline) ---
-    # The pipeline's imputers only run for missing_strategy == "impute"; the two
-    # "drop" modes change the data/columns themselves, so we do them here.
-    if config.missing_strategy == "drop_col":
-        # Drop any selected feature that has a blank anywhere in the training split.
-        features = [f for f in features if not train[f].isna().any()]
-        if not features:
-            raise ValueError("drop_col removed every selected feature (all had missing values).")
-        config = config.model_copy(update={"features": features})
+    # --- Per-feature missing strategies that REMOVE data (done before the pipeline) ---
+    # Each feature's strategy was resolved (with defaults) in resolve_missing.
+    # The pipeline handles "impute"; the two "drop" modes change the data/columns
+    # themselves, so we apply them here, per feature.
+    resolved = resolve_missing(config, features)
 
-    if config.missing_strategy == "drop_row":
-        # Drop rows with a blank in any selected feature (independently per split).
-        train = train.dropna(subset=features)
-        val = val.dropna(subset=features)
+    # drop_col: exclude these features entirely.
+    drop_col = [f for f in features if resolved[f][0] == "drop_col"]
+    features = [f for f in features if f not in drop_col]
+    if not features:
+        raise ValueError("Every selected feature was set to 'Exclude' (drop_col).")
+    config = config.model_copy(update={"features": features})
+
+    # drop_row: drop rows that are blank in any of these features (per split).
+    drop_row = [f for f in features if resolved[f][0] == "drop_row"]
+    if drop_row:
+        train = train.dropna(subset=drop_row)
+        val = val.dropna(subset=drop_row)
 
     y_train, y_val = _target(train), _target(val)
 

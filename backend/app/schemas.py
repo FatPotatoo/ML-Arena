@@ -21,6 +21,24 @@ from pydantic import BaseModel, Field, field_validator
 from .data import ALL_FEATURES
 
 
+class FeatureMissing(BaseModel):
+    """How to handle missing values for ONE feature.
+
+    The user sets this per-feature (only for features that actually have gaps).
+      strategy:
+        impute   = fill the gap with `statistic`
+        drop_row = drop any row where THIS feature is missing
+        drop_col = exclude this feature entirely
+      statistic (used only when strategy == "impute"):
+        mean/median = numeric columns;  mode = most common value;
+        constant    = a fixed fill (0 for numbers). For text columns mean/median
+                      don't apply and are treated as mode downstream.
+    """
+    strategy: Literal["impute", "drop_row", "drop_col"] = "impute"
+    statistic: Literal["mean", "median", "mode", "constant"] = "median"
+    model_config = {"extra": "forbid"}
+
+
 class TrainConfig(BaseModel):
     """All user-configurable knobs for one training run.
 
@@ -35,18 +53,14 @@ class TrainConfig(BaseModel):
     # for each new config (you must never share one mutable list as a default).
     features: list[str] = Field(default_factory=lambda: list(ALL_FEATURES))
 
-    # --- Missing values ----------------------------------------------------
-    # What to do with cells that have no value.
-    #   drop_row  = delete any row that has a missing value
-    #   drop_col  = delete any column that has missing values
-    #   impute    = fill the gap with a statistic (the default, and most useful)
-    missing_strategy: Literal["drop_row", "drop_col", "impute"] = "impute"
-
-    # If imputing, which statistic fills the gap. Only used when
-    # missing_strategy == "impute" (ignored otherwise).
-    #   mean/median = for numeric columns;  mode = most common value;
-    #   constant    = a fixed fill value (e.g. 0)
-    impute_statistic: Literal["mean", "median", "mode", "constant"] = "median"
+    # --- Missing values (PER FEATURE) --------------------------------------
+    # A map of {feature name -> how to handle its missing values}. Only features
+    # that actually have gaps need an entry; any feature with gaps that is NOT
+    # listed here falls back to a sensible default (impute by median for numeric,
+    # mode for text). See the FeatureMissing model above for the options.
+    #   e.g. {"Sunshine": {"strategy": "impute", "statistic": "mean"},
+    #         "Cloud3pm": {"strategy": "drop_row"}}
+    missing: dict[str, FeatureMissing] = Field(default_factory=dict)
 
     # Columns that should ALSO get a "<col>_was_missing" 0/1 flag added, so the
     # model can learn from the *fact* that a value was missing. A list of column
@@ -115,4 +129,12 @@ class TrainConfig(BaseModel):
             raise ValueError(f"Unknown feature(s): {unknown}. Allowed: {ALL_FEATURES}")
         if not value:
             raise ValueError("Select at least one feature.")
+        return value
+
+    @field_validator("missing")
+    @classmethod
+    def missing_keys_must_be_known(cls, value: dict) -> dict:
+        unknown = [f for f in value if f not in ALL_FEATURES]
+        if unknown:
+            raise ValueError(f"Unknown feature(s) in `missing`: {unknown}.")
         return value

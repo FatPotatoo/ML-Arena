@@ -4,8 +4,9 @@ export const DEFAULT_CONFIG = {
   // features starts empty; App fills it with "all features" once the dataset
   // info arrives (so every box is checked by default, like the backend default).
   features: [],
-  missing_strategy: 'impute',
-  impute_statistic: 'median',
+  // PER-FEATURE missing handling: { featureName: { strategy, statistic } }.
+  // App fills this once dataset info arrives (one entry per feature that has gaps).
+  missing: {},
   location_encoding: 'onehot',
   wind_encoding: 'cyclical',
   scaling: 'standard',
@@ -16,11 +17,17 @@ export const DEFAULT_CONFIG = {
   threshold: 0.5,
 }
 
+// Per-feature missing options (used by the missing-values section, not OPTIONS).
+export const MISSING_STRATEGY = [['impute', 'Impute'], ['drop_row', 'Drop rows'], ['drop_col', 'Exclude feature']]
+export const STATISTIC_NUMERIC = [['median', 'Median'], ['mean', 'Mean'], ['mode', 'Most frequent'], ['constant', 'Constant (0)']]
+export const STATISTIC_TEXT = [['mode', 'Most frequent'], ['constant', 'Constant']]
+
+// The default impute statistic for a feature, by its type.
+export const defaultStatistic = (type) => (type === 'numeric' ? 'median' : 'mode')
+
 // For each dropdown knob: a list of [value-sent-to-backend, label-shown-to-user].
 // The values exactly match the Literal options in schemas.py.
 export const OPTIONS = {
-  missing_strategy: [['impute', 'Impute (fill gaps)'], ['drop_row', 'Drop rows with gaps'], ['drop_col', 'Drop columns with gaps']],
-  impute_statistic: [['median', 'Median'], ['mean', 'Mean'], ['mode', 'Most frequent'], ['constant', 'Constant (0)']],
   location_encoding: [['onehot', 'One-hot'], ['ordinal', 'Ordinal'], ['drop', 'Drop']],
   wind_encoding: [['cyclical', 'Cyclical (sin/cos)'], ['onehot', 'One-hot'], ['drop', 'Drop']],
   scaling: [['standard', 'Standard'], ['minmax', 'Min-max'], ['robust', 'Robust'], ['none', 'None']],

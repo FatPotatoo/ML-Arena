@@ -15,6 +15,8 @@ Why a ColumnTransformer? Different columns need different treatment — you can'
 scale the word "Albury" or one-hot-encode a temperature. ColumnTransformer routes
 each group of columns to the right sub-recipe and glues the results side by side.
 """
+from collections import defaultdict
+
 import numpy as np
 import pandas as pd
 from sklearn.compose import ColumnTransformer
@@ -44,20 +46,44 @@ COMPASS = {
     "W": 270.0, "WNW": 292.5, "NW": 315.0,  "NNW": 337.5,
 }
 
-# Lookup tables: a config string -> the scikit-learn object/argument it means.
+# Lookup table: scaling name -> the scikit-learn class.
 _SCALERS = {"standard": StandardScaler, "minmax": MinMaxScaler, "robust": RobustScaler}
-_IMPUTE_STRATEGY = {"mean": "mean", "median": "median", "mode": "most_frequent", "constant": "constant"}
 
 
 # --- small helpers -------------------------------------------------------
 
-def _make_imputer(config: TrainConfig) -> SimpleImputer:
-    """A SimpleImputer fills gaps. For numeric cols we honour the user's choice;
-    constant fills with 0."""
-    strategy = _IMPUTE_STRATEGY[config.impute_statistic]
-    if strategy == "constant":
+def resolve_missing(config: TrainConfig, features: list[str]) -> dict[str, tuple[str, str]]:
+    """Work out (strategy, statistic) for EACH feature.
+
+    A feature the user configured uses that setting; any other feature falls back
+    to the default (impute by median). Text columns can't use mean/median, so we
+    quietly downgrade those to mode. Shared by the pipeline and the training step.
+    """
+    resolved = {}
+    for feature in features:
+        entry = config.missing.get(feature)
+        strategy = entry.strategy if entry else "impute"
+        statistic = entry.statistic if entry else "median"
+        if feature not in NUMERIC_FEATURES and statistic in ("mean", "median"):
+            statistic = "mode"
+        resolved[feature] = (strategy, statistic)
+    return resolved
+
+
+def _numeric_imputer(statistic: str) -> SimpleImputer:
+    """Imputer for a numeric column, per the chosen statistic."""
+    if statistic == "constant":
         return SimpleImputer(strategy="constant", fill_value=0)
-    return SimpleImputer(strategy=strategy)
+    if statistic == "mode":
+        return SimpleImputer(strategy="most_frequent")
+    return SimpleImputer(strategy=statistic)  # "mean" or "median"
+
+
+def _text_imputer(statistic: str) -> SimpleImputer:
+    """Imputer for a text column: only mode or a constant placeholder make sense."""
+    if statistic == "constant":
+        return SimpleImputer(strategy="constant", fill_value="__missing__")
+    return SimpleImputer(strategy="most_frequent")
 
 
 def _make_scaler(name: str):
@@ -87,48 +113,45 @@ def _cyclical_wind(frame):
 
 # --- per-group sub-recipes ----------------------------------------------
 
-def _numeric_recipe(config: TrainConfig):
-    """Continuous columns: (optionally) impute, then (optionally) scale."""
-    steps = []
-    if config.missing_strategy == "impute":
-        steps.append(("impute", _make_imputer(config)))
+# Note: every recipe always includes an imputer. That's safe because rows are
+# already row-dropped (for "drop_row" features) and columns excluded (for
+# "drop_col") back in training.py BEFORE this runs — so a leftover imputer on a
+# gap-free column is simply a harmless no-op. The recipe only needs the statistic.
+
+def _numeric_recipe(config: TrainConfig, statistic: str):
+    """Continuous columns: impute (per statistic), then (optionally) scale."""
+    steps = [("impute", _numeric_imputer(statistic))]
     scaler = _make_scaler(config.scaling)
     if scaler is not None:
         steps.append(("scale", scaler))
-    return Pipeline(steps) if steps else "passthrough"
+    return Pipeline(steps)
 
 
-def _location_recipe(config: TrainConfig):
-    """Location: fill blanks with the most common station, then encode to numbers."""
+def _location_recipe(config: TrainConfig, statistic: str):
+    """Location: fill blanks, then encode to numbers."""
     if config.location_encoding == "onehot":
         encoder = OneHotEncoder(handle_unknown="ignore", sparse_output=False)
     else:  # "ordinal" — one integer code per location
         encoder = OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1)
-    steps = []
-    if config.missing_strategy == "impute":
-        steps.append(("impute", SimpleImputer(strategy="most_frequent")))
-    steps.append(("encode", encoder))
-    return Pipeline(steps)
+    return Pipeline([("impute", _text_imputer(statistic)), ("encode", encoder)])
 
 
 def _wind_recipe(config: TrainConfig):
     """Wind directions: either cyclical sin/cos (handles its own blanks) or one-hot."""
     if config.wind_encoding == "cyclical":
         return FunctionTransformer(_cyclical_wind)
-    steps = []
-    if config.missing_strategy == "impute":
-        steps.append(("impute", SimpleImputer(strategy="most_frequent")))
-    steps.append(("encode", OneHotEncoder(handle_unknown="ignore", sparse_output=False)))
-    return Pipeline(steps)
+    return Pipeline([
+        ("impute", _text_imputer("mode")),
+        ("encode", OneHotEncoder(handle_unknown="ignore", sparse_output=False)),
+    ])
 
 
-def _binary_recipe(config: TrainConfig):
+def _binary_recipe(statistic: str):
     """RainToday is Yes/No text -> impute, then map to 1/0 (No=0, Yes=1)."""
-    steps = []
-    if config.missing_strategy == "impute":
-        steps.append(("impute", SimpleImputer(strategy="most_frequent")))
-    steps.append(("encode", OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1)))
-    return Pipeline(steps)
+    return Pipeline([
+        ("impute", _text_imputer(statistic)),
+        ("encode", OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1)),
+    ])
 
 
 # --- the public builder --------------------------------------------------
@@ -140,19 +163,28 @@ def build_pipeline(config: TrainConfig) -> Pipeline:
     #    A column the user didn't select simply never appears here, so it's ignored.
     transformers = []
 
+    # The per-feature missing settings (with defaults filled in).
+    resolved = resolve_missing(config, config.features)
+
+    # Numeric columns can each have a different impute statistic, so we group them
+    # by statistic — one transformer per distinct statistic (e.g. all "median"
+    # columns together, all "mean" columns together).
     numeric = [f for f in config.features if f in NUMERIC_FEATURES]
-    if numeric:
-        transformers.append(("numeric", _numeric_recipe(config), numeric))
+    by_statistic = defaultdict(list)
+    for feature in numeric:
+        by_statistic[resolved[feature][1]].append(feature)
+    for statistic, cols in by_statistic.items():
+        transformers.append((f"numeric_{statistic}", _numeric_recipe(config, statistic), cols))
 
     if "Location" in config.features and config.location_encoding != "drop":
-        transformers.append(("location", _location_recipe(config), ["Location"]))
+        transformers.append(("location", _location_recipe(config, resolved["Location"][1]), ["Location"]))
 
     wind = [w for w in WIND_DIR_COLS if w in config.features]
     if wind and config.wind_encoding != "drop":
         transformers.append(("wind", _wind_recipe(config), wind))
 
     if "RainToday" in config.features:
-        transformers.append(("binary", _binary_recipe(config), ["RainToday"]))
+        transformers.append(("binary", _binary_recipe(resolved["RainToday"][1]), ["RainToday"]))
 
     # Optional "was this value missing?" 0/1 flag columns for the chosen columns.
     if config.missing_indicator_columns:
