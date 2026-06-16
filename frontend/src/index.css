@@ -1,0 +1,102 @@
+/* Plain base styles. We'll add Tailwind in a later increment; for now, hand-written
+   CSS keeps the number of new concepts small. */
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: #1a1a1a;
+  background: #f7f7f8;
+}
+
+main {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 2rem 1.5rem;
+}
+
+h1 {
+  margin-bottom: 0.25rem;
+}
+
+h3 {
+  margin: 1.25rem 0 0.5rem;
+}
+
+/* A simple panel used for each section. */
+.card {
+  background: #fff;
+  border: 1px solid #e5e5e8;
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+  margin: 1rem 0;
+}
+
+/* Responsive grid: as many columns as fit, each at least 220px wide. */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.75rem 1.25rem;
+}
+
+/* One labeled control (label on top, input below). */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.9rem;
+}
+
+.field select,
+.field input[type="range"] {
+  width: 100%;
+}
+
+.feature-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+button {
+  cursor: pointer;
+  border: 1px solid #c9c9cf;
+  background: #f0f0f3;
+  border-radius: 6px;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.85rem;
+}
+
+button:hover {
+  background: #e6e6ea;
+}
+
+/* Feature checkboxes laid out in columns. */
+.features {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 0.3rem 1rem;
+}
+
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.9rem;
+}
+
+.checkbox small {
+  color: #888;
+}
+
+pre {
+  background: #1e1e25;
+  color: #e6e6e6;
+  padding: 0.85rem;
+  border-radius: 8px;
+  overflow: auto;
+  font-size: 0.8rem;
+}
+
+summary {
+  cursor: pointer;
+  font-weight: 500;
+}
